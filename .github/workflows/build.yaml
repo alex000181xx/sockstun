@@ -1,72 +1,48 @@
-name: "Build"
+name: Build and Extract .so files
 
 on:
   push:
-    branches:
-      - '**'
+    branches: [ main ]
   pull_request:
-  release:
-    types:
-      - published
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
   build:
-    name: Build
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: true
-      - name: Build
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y wget unzip file git openjdk-17-jdk
-          git submodule foreach git submodule update --init
-          wget https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          mkdir sdk
-          unzip -d sdk commandlinetools-linux-11076708_latest.zip
-          export ANDROID_HOME=`pwd`/sdk
-          export ANDROID_SDK_ROOT=`pwd`/sdk
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          yes | sdk/cmdline-tools/bin/sdkmanager --sdk_root=`pwd`/sdk --licenses
-          ./gradlew assembleRelease
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            ref_name="pr-${{ github.event.pull_request.number }}"
-          else
-            ref_name="${{ github.ref_name }}"
-          fi
-          echo "ref_name=${ref_name}" >> $GITHUB_ENV
-          cp app/build/outputs/apk/release/hev.sockstun-*-release.apk hev.sockstun-${ref_name}-release.apk
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: hev.sockstun-${{ env.ref_name }}-release.apk
-          path: hev.sockstun-${{ env.ref_name }}-release.apk
-          if-no-files-found: error
-          retention-days: 1
 
-  release:
-    name: Release
-    runs-on: ubuntu-20.04
-    needs: build
-    if: github.event_name == 'release'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v3
         with:
-          fetch-depth: 1
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v2
         with:
-          path: release
-          pattern: "hev.sockstun-*"
-          merge-multiple: true
-      - name: Upload artifacts
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          api-level: 33
+          build-tools-version: 33.0.2
+
+      - name: Build project (assembleDebug)
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Create directory for extracted .so files
+        run: mkdir -p extracted_so_files
+
+      - name: Copy .so files from build to extracted_so_files
         run: |
-          for i in release/hev.sockstun-*; do
-            gh release upload ${{ github.event.release.tag_name }} $i
-          done
+          # ابحث عن ملفات .so داخل مجلد obj في build وانسخها
+          find ./app/build/intermediates/cmake/debug/obj/ -name "*.so" -exec cp {} extracted_so_files/ \; || true
+          find ./app/build/intermediates/ndkBuild/debug/obj/ -name "*.so" -exec cp {} extracted_so_files/ \; || true
+
+      - name: List extracted files
+        run: ls -la extracted_so_files
+
+      - name: Upload extracted .so files as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: extracted-so-files
+          path: extracted_so_files/
